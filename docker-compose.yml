@@ -1,0 +1,102 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: es_postgres
+    environment:
+      POSTGRES_USER: esuser
+      POSTGRES_PASSWORD: espass
+      POSTGRES_DB: esdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U esuser -d esdb"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: es_kafka
+    ports:
+      - "9092:9092"
+    environment:
+      # ---------------------------
+      # KRaft mode (NO ZooKeeper)
+      # ---------------------------
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+
+      # ---------------------------
+      # Listeners
+      # ---------------------------
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+
+      # ---------------------------
+      # Single node dev settings
+      # ---------------------------
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+      # ---------------------------
+      # Required for KRaft
+      # (cluster id must be stable)
+      # ---------------------------
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+
+  api:
+    build: ./api
+    container_name: es_api
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - PGHOST=postgres
+      - PGUSER=esuser
+      - PGPASSWORD=espass
+      - PGDATABASE=esdb
+      - PGPORT=5432
+      - KAFKA_BROKER=kafka:9092
+      - KAFKA_TOPIC=wallet-events
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  consumer:
+    build: ./consumer
+    container_name: es_consumer
+    environment:
+      - PGHOST=postgres
+      - PGUSER=esuser
+      - PGPASSWORD=espass
+      - PGDATABASE=esdb
+      - PGPORT=5432
+      - KAFKA_BROKER=kafka:9092
+      - KAFKA_TOPIC=wallet-events
+      - KAFKA_GROUP=wallet-projector
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
